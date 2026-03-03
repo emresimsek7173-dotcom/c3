@@ -1,18 +1,19 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import streamlit as st
+import plotly.graph_objects as go
 from matplotlib.colors import TwoSlopeNorm
 from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter, median_filter, label, sobel
 from scipy.signal import detrend
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 import datetime
 import io
 import os
-import plotly.graph_objects as go # 3D için bu kütüphane şart
+
 # --- FİZİKSEL SABİTLER ---
 SENSOR_MESAFESI = 0.80  
 YUKSEKLIK_SABITI = 0.20 
@@ -31,16 +32,14 @@ class C3AnalizSistemi:
         
     def load_and_clean_data(self, file_buffer):
         try:
-            # Streamlit'ten gelen buffer'ı oku
             df = pd.read_csv(file_buffer, encoding='utf-8')
             df.columns = df.columns.str.strip().str.lower().str.replace('ı', 'i').str.replace('ş', 's')
             df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
             
-            # ESP32'den gelen S1_Z ve S2_Z farkını al
+            # ESP32'den gelen S1_Z ve S2_Z farkını işle
             df['raw_diff'] = df['s1_z'] - df['s2_z']
             df['clean_diff'] = df['raw_diff'] - df['raw_diff'].median()
             
-            # Satır bazlı gürültü temizleme (Detrend)
             for r in df['satir'].unique():
                 mask = df['satir'] == r
                 if sum(mask) > 5:
@@ -113,45 +112,46 @@ class C3AnalizSistemi:
         self.ax2d.set_ylabel("SUTUN (İleri Metre)")
         self.ax2d.set_title(f"C3 Saha Analizi - {mode} Modu")
 
-        # Hedef Analizi Yazısını Hazırla
         targets = self.detect_targets(zi, gain)
         txt = f"SABIT AYAK: {YUKSEKLIK_SABITI*100}cm | SENSOR: {SENSOR_MESAFESI*100}cm\n\n"
-        txt += "TESPITLER (Yan, İleri, Derinlik):\n"
+        txt += "TESPITLER (X, Y, Derinlik):\n"
         txt += "-" * 35 + "\n"
         for t in targets:
             d = self.calculate_depth(t['amp']/gain)
             txt += f"H#{t['id']}: X:{t['x']:.1f}m, Y:{t['y']:.1f}m -> D:{d:.1f}m\n"
         self.info_text_str = txt
 
-# --- STREAMLIT ARAYÜZÜ ---
 def main():
     st.set_page_config(page_title="C3 Pro Web Analiz", layout="wide")
     st.title("🛰️ C3 Gradiometre - Profesyonel Analiz")
 
+    # 1. SOL MENÜ (SLIDERLAR)
+    with st.sidebar:
+        st.header("⚙️ Analiz Ayarları")
+        gain = st.slider("Gain (Kazanç)", 0.1, 1000.0, 100.0)
+        filt = st.slider("Eşik Değeri", 0, 1000, 30)
+        blur = st.slider("Gaussian Blur", 0.0, 5.0, 1.0)
+        med = st.slider("Median Filter", 0, 9, 3, step=1)
+        mode = st.radio("Analiz Modu", ('Raw', 'Analytic', 'Gradient'))
+        st.divider()
+        st.info("Ayarlar değiştikçe grafikler anlık güncellenir.")
+
+    # 2. DOSYA YÜKLEME
     uploaded_file = st.file_uploader("Telefondaki CSV Dosyasını Seç", type=['csv'])
 
     if uploaded_file:
         analiz = C3AnalizSistemi(uploaded_file)
-        
-        with st.sidebar:
-            st.header("⚙️ Filtre Ayarları")
-            gain = st.slider("Gain (Kazanç)", 0.1, 1000.0, 100.0)
-            filt = st.slider("Eşik Değeri", 0, 1000, 30)
-            blur = st.slider("Gaussian Blur", 0.0, 5.0, 1.0)
-            med = st.slider("Median Filter", 0, 9, 3, step=1)
-            mode = st.radio("Analiz Modu", ('Raw', 'Analytic', 'Gradient'))
-        
         analiz.process_and_plot(gain, filt, blur, med, mode)
         
         col1, col2 = st.columns([2, 1])
         with col1:
+            st.subheader("🖼️ 2D Manyetik Isı Haritası")
             st.pyplot(analiz.fig)
             
         with col2:
-            st.subheader("🎯 Tespit Edilen Hedefler")
+            st.subheader("🎯 Hedef Analizi")
             st.code(analiz.info_text_str)
             
-            # PDF Hazırlama (Bellek üzerinde)
             if st.button("📥 PDF RAPORU OLUŞTUR"):
                 buf = io.BytesIO()
                 analiz.fig.savefig("temp.png")
@@ -165,32 +165,26 @@ def main():
                 ]
                 doc.build(elements)
                 st.download_button("Raporu İndir", data=buf.getvalue(), file_name="C3_Saha_Raporu.pdf", mime="application/pdf")
-                os.remove("temp.png")        
-        st.divider() # Araya bir çizgi çekelim
-        st.subheader("🌋 3D Manyetik Topografya")
-        st.write("Haritayı parmağınızla döndürebilir, zoom yapabilirsiniz.")
+                if os.path.exists("temp.png"): os.remove("temp.png")
 
-        # Plotly ile İnteraktif 3D Yüzey Oluşturma
+        # 3. 3D GÖRÜNÜM (PLOTLY)
+        st.divider()
+        st.subheader("🌋 3D Manyetik Topografya")
+        
         fig3d = go.Figure(data=[go.Surface(
             z=analiz.zi_cache, 
             x=analiz.grid_x[0, :], 
             y=analiz.grid_y[:, 0],
             colorscale='Turbo'
         )])
-
         fig3d.update_layout(
             scene=dict(
-                xaxis_title='Yan (Metre)',
-                yaxis_title='İleri (Metre)',
-                zaxis_title='Şiddet',
-                aspectmode='manual',
-                aspectratio=dict(x=1, y=1, z=0.5) # Z eksenini (derinliği) biraz basık yapalım ki net görünsün
+                xaxis_title='Yan (X)', yaxis_title='İleri (Y)', zaxis_title='Şiddet',
+                aspectratio=dict(x=1, y=1, z=0.5)
             ),
-            margin=dict(l=0, r=0, b=0, t=0),
-            height=600
+            margin=dict(l=0, r=0, b=0, t=0), height=700
         )
-
         st.plotly_chart(fig3d, use_container_width=True)
+
 if __name__ == "__main__":
     main()
-
