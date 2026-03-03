@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-from matplotlib.colors import TwoSlopeNorm
+from matplotlib.colors import TwoSlopeNorm, Normalize
 from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter, median_filter, label, sobel
 from scipy.signal import detrend
@@ -46,7 +46,7 @@ class C3AnalizSistemi:
         return min(depth, MAX_DEPTH)
 
 def main():
-    st.set_page_config(page_title="C3 Dev Ekran", layout="wide")
+    st.set_page_config(page_title="C3 Dev Ekran v2", layout="wide")
     st.title("🛰️ C3 Gradiometre - Saf 2D Analiz")
 
     with st.sidebar:
@@ -73,7 +73,6 @@ def main():
                       (gx, gy), method='cubic', fill_value=0)
         zi = np.nan_to_num(zi)
 
-        # Filtreler
         if med > 0:
             m_size = int(med)
             if m_size % 2 == 0: m_size += 1
@@ -82,64 +81,60 @@ def main():
         zi = np.where(np.abs(zi) < filt, 0, zi)
         if blur > 0: zi = gaussian_filter(zi, sigma=blur)
         
-        # --- ANALİTİK MOD HATASIZ HESAPLAMA ---
+        # --- ANALİTİK MOD HATASI ÇÖZÜLDÜ ---
         if mode == 'Analytic':
-            dx = sobel(zi, axis=1)
-            dy = sobel(zi, axis=0)
-            # Kare alma hatasını önlemek için abs ve power kullanımı
+            dx, dy = sobel(zi, axis=1), sobel(zi, axis=0)
             zi = np.sqrt(np.square(dx) + np.square(dy) + np.square(zi))
         elif mode == 'Gradient':
-            dx = sobel(zi, axis=1)
-            dy = sobel(zi, axis=0)
+            dx, dy = sobel(zi, axis=1), sobel(zi, axis=0)
             zi = np.sqrt(np.square(dx) + np.square(dy))
 
         # --- DEV 2D ÇİZİM ---
         plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(18, 12)) # Ekranı devleştirdik
+        fig, ax = plt.subplots(figsize=(18, 12))
         
-        lim = max(np.abs(zi).max(), 1.0)
-        norm = TwoSlopeNorm(vmin=-lim if mode=='Raw' else 0, vcenter=0 if mode=='Raw' else None, vmax=lim)
+        # Renk Ölçeklendirme Hatası Fix
+        v_max = max(np.abs(zi).max(), 1.0)
+        if mode == 'Raw':
+            # Raw modda eksi ve artı değerler olduğu için vcenter=0 zorunlu
+            norm = TwoSlopeNorm(vmin=-v_max, vcenter=0, vmax=v_max)
+        else:
+            # Analytic ve Gradient modda veriler hep artıdır, normal Normalize kullanmalıyız
+            norm = Normalize(vmin=0, vmax=v_max)
         
         im = ax.imshow(zi, extent=[xi.min(), xi.max(), yi.min(), yi.max()], 
                        origin='lower', cmap='turbo', norm=norm, aspect='auto')
         
+        # --- ADIM SAYISINA GÖRE AKILLI GRID ---
         if show_grid:
+            # Kaç farklı satir ve sutun varsa o kadar çizgi çeker (Mesela 9 satir varsa 9 çizgi)
+            unique_satir = np.sort(analiz.df['satir'].unique())
+            unique_sutun = np.sort(analiz.df['sutun'].unique())
+            ax.set_xticks(unique_satir)
+            ax.set_yticks(unique_sutun)
             ax.grid(True, color='white', linestyle='--', alpha=0.3)
             
-        plt.colorbar(im, ax=ax, label="Manyetik Şiddet")
-        ax.set_title(f"C3 ANALİZ - {mode} MODU", fontsize=20)
-        ax.set_xlabel("YAN ADIM (Satir)", fontsize=14)
-        ax.set_ylabel("İLERİ ADIM (Sutun)", fontsize=14)
-        
+        plt.colorbar(im, ax=ax, label="Şiddet")
+        ax.set_xlabel("YAN ADIM (Satir)"); ax.set_ylabel("İLERİ ADIM (Sutun)")
         st.pyplot(fig, use_container_width=True)
 
-        # --- ALT BİLGİ VE HEDEFLER ---
+        # Hedefler ve 3D altta kalsın
         st.divider()
         col1, col2 = st.columns([1, 1])
-        
         with col1:
-            st.subheader("🎯 Tespit Edilen Hedefler")
+            st.subheader("🎯 Hedef Tahminleri")
             threshold = (analiz.std_noise) * 3.5
             binary = np.abs(zi) > (threshold * (gain / 100))
             labeled, num = label(binary)
-            
-            targets = []
             for i in range(1, num + 1):
                 mask = labeled == i
                 if np.sum(mask) < 5: continue
                 val = zi[mask].mean()
-                coords = np.argwhere(mask)
-                y_idx, x_idx = coords.mean(axis=0).astype(int)
                 d = analiz.calculate_depth(val/gain)
-                targets.append({'amp': val, 'x': xi[min(x_idx, len(xi)-1)], 'y': yi[min(y_idx, len(yi)-1)], 'd': d})
-            
-            for i, t in enumerate(sorted(targets, key=lambda x: abs(x['amp']), reverse=True)[:5]):
-                st.write(f"🟢 **Hedef #{i+1}:** Yan Adım: {t['x']:.1f}, İleri Adım: {t['y']:.1f} | **Derinlik: {t['d']:.2f}m**")
-
+                st.write(f"Hedef #{i}: Derinlik {d:.2f}m")
         with col2:
             st.subheader("🌋 3D Görünüm")
             fig3d = go.Figure(data=[go.Surface(z=zi, colorscale='Turbo')])
-            fig3d.update_layout(height=400, margin=dict(l=0, r=0, b=0, t=0))
             st.plotly_chart(fig3d, use_container_width=True)
 
 if __name__ == "__main__":
