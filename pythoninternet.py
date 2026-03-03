@@ -8,6 +8,7 @@ from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter, median_filter, label, sobel
 from scipy.signal import detrend
 import io
+import datetime
 
 # --- SENİN ORİJİNAL SABİTLERİN ---
 SENSOR_MESAFESI = 0.80
@@ -78,8 +79,8 @@ class C3AnalizSistemi:
         return zi, xi, yi
 
 def main():
-    st.set_page_config(page_title="C3 Pro Link", layout="wide")
-    st.title("🛰️ C3 Gradiometre - Orijinal Kod Sistemi")
+    st.set_page_config(page_title="C3 Pro Full Web", layout="wide")
+    st.title("🛰️ C3 Gradiometre - Orijinal Bilgi ve Analiz Paneli")
 
     with st.sidebar:
         st.header("⚙️ Ayarlar")
@@ -88,45 +89,74 @@ def main():
         blur = st.slider("Blur", 0.0, 5.0, 1.0)
         med = st.slider("Median", 0, 9, 3)
         mode = st.radio("Mod", ('Raw', 'Analytic', 'Gradient'))
-
-    file = st.file_uploader("CSV Dosyasını Seç reisim", type=['csv'])
+        st.divider()
+        st.write("Saha Ölçüleri:")
+        
+    file = st.file_uploader("CSV Dosyasını Yükle reisim", type=['csv'])
     
     if file:
         analiz = C3AnalizSistemi(file)
         zi, xi, yi = analiz.process(gain, filt, blur, med, mode)
         
-        # 2D EKRAN (SENİN ORİJİNAL DÜZENİN)
+        # --- BİLGİSAYARDAKİ ÇOKLU PANEL DÜZENİ (GS) ---
         plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(12, 8))
+        fig = plt.figure(figsize=(16, 10))
+        gs = fig.add_gridspec(3, 2, width_ratios=[2, 1], height_ratios=[2, 1, 1])
+        
+        ax2d = fig.add_subplot(gs[0:2, 0])
+        ax_prof = fig.add_subplot(gs[0, 1])
+        ax_hist = fig.add_subplot(gs[1, 1])
+        ax_info = fig.add_subplot(gs[2, :]) # Bilgi kısmını alta dev kutu olarak açtım
+        ax_info.axis('off')
+
+        # 2D ANA HARİTA
         lim = max(np.abs(zi).max(), 1.0)
         norm = TwoSlopeNorm(vmin=-lim if mode=='Raw' else 0, vcenter=0 if mode=='Raw' else None, vmax=lim)
-        
-        im = ax.imshow(zi, extent=[xi.min(), xi.max(), yi.min(), yi.max()], 
+        im = ax2d.imshow(zi, extent=[xi.min(), xi.max(), yi.min(), yi.max()], 
                        origin='lower', cmap='turbo', norm=norm, aspect='auto')
-        plt.colorbar(im, ax=ax)
-        ax.set_xlabel("SATIR (Yana Kayma - Metre)")
-        ax.set_ylabel("SUTUN (İleri Gidiş - Metre)")
+        fig.colorbar(im, ax=ax2d)
+        ax2d.set_title("2D MANYETİK SAHA")
+        ax2d.set_xlabel("SATIR (Yan)"); ax2d.set_ylabel("SUTUN (İleri)")
+
+        # KESİT (PROFİL) - Otomatik tam orta noktadan kesit alır
+        mid_idx = zi.shape[0] // 2
+        ax_prof.plot(xi, zi[mid_idx, :], color='cyan')
+        ax_prof.set_title(f"Orta Hat Kesit Analizi")
+        ax_prof.grid(alpha=0.2)
+
+        # HISTOGRAM (SIKLIK)
+        ax_hist.hist(zi.flatten(), bins=40, color='#00ff9d', alpha=0.6)
+        ax_hist.set_yscale('log')
+        ax_hist.set_title("Veri Dağılım Sıklığı")
+
+        # BİLGİ KISMI (GERİ GELDİ)
+        threshold = (analiz.std_noise) * 3.5
+        binary = np.abs(zi) > (threshold * (gain / 100))
+        labeled, num = label(binary)
+        
+        info_txt = f"Saha Verisi: {xi.max():.1f}m x {yi.max():.1f}m | Toplam Nokta: {len(analiz.df)}\n"
+        info_txt += f"Gürültü Standart Sapma (STD): {analiz.std_noise:.4f}\n\n"
+        info_txt += "TESPİT EDİLEN HEDEFLER VE ANALİZ:\n" + "-"*50 + "\n"
+        
+        targets = []
+        for i in range(1, num + 1):
+            mask = labeled == i
+            if np.sum(mask) < 5: continue
+            val = zi[mask].mean()
+            coords = np.argwhere(mask)
+            y_idx, x_idx = coords.mean(axis=0).astype(int)
+            d = analiz.calculate_depth(val/gain)
+            info_txt += f"Hedef #{i}: Konum [Yan:{xi[x_idx]:.1f}m, İleri:{yi[y_idx]:.1f}m] | Ortalama Şiddet: {val:.2f} | Tahmini Derinlik: {d:.2f}m\n"
+        
+        ax_info.text(0, 1, info_txt, fontsize=11, color='#00ff9d', family='monospace', verticalalignment='top')
         
         st.pyplot(fig, use_container_width=True)
 
-        # HEDEF LİSTESİ VE 3D (ALT PANEL)
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.subheader("🎯 Hedef Tahminleri")
-            threshold = (analiz.std_noise) * 3.5
-            binary = np.abs(zi) > (threshold * (gain / 100))
-            labeled, num = label(binary)
-            for i in range(1, min(num + 1, 6)):
-                mask = labeled == i
-                if np.sum(mask) < 5: continue
-                val = zi[mask].mean()
-                d = analiz.calculate_depth(val/gain)
-                st.write(f"Hedef {i}: Derinlik {d:.2f}m")
-        
-        with col2:
-            st.subheader("🌋 3D Görünüm")
-            fig3d = go.Figure(data=[go.Surface(z=zi, x=xi, y=yi, colorscale='Turbo')])
-            st.plotly_chart(fig3d, use_container_width=True)
+        # 3D ALTTA DURSUN
+        st.divider()
+        st.subheader("🌋 3D İnteraktif Görünüm")
+        fig3d = go.Figure(data=[go.Surface(z=zi, x=xi, y=yi, colorscale='Turbo')])
+        st.plotly_chart(fig3d, use_container_width=True)
 
 if __name__ == "__main__":
     main()
