@@ -12,7 +12,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 import datetime
 import io
 import os
-
+import plotly.graph_objects as go # 3D için bu kütüphane şart
 # --- FİZİKSEL SABİTLER ---
 SENSOR_MESAFESI = 0.80  
 YUKSEKLIK_SABITI = 0.20 
@@ -165,7 +165,32 @@ def main():
                 ]
                 doc.build(elements)
                 st.download_button("Raporu İndir", data=buf.getvalue(), file_name="C3_Saha_Raporu.pdf", mime="application/pdf")
-                os.remove("temp.png")
+                os.remove("temp.png")        
+        st.divider() # Araya bir çizgi çekelim
+        st.subheader("🌋 3D Manyetik Topografya")
+        st.write("Haritayı parmağınızla döndürebilir, zoom yapabilirsiniz.")
 
+        # Plotly ile İnteraktif 3D Yüzey Oluşturma
+        fig3d = go.Figure(data=[go.Surface(
+            z=analiz.zi_cache, 
+            x=analiz.grid_x[0, :], 
+            y=analiz.grid_y[:, 0],
+            colorscale='Turbo'
+        )])
+
+        fig3d.update_layout(
+            scene=dict(
+                xaxis_title='Yan (Metre)',
+                yaxis_title='İleri (Metre)',
+                zaxis_title='Şiddet',
+                aspectmode='manual',
+                aspectratio=dict(x=1, y=1, z=0.5) # Z eksenini (derinliği) biraz basık yapalım ki net görünsün
+            ),
+            margin=dict(l=0, r=0, b=0, t=0),
+            height=600
+        )
+
+        st.plotly_chart(fig3d, use_container_width=True)
 if __name__ == "__main__":
     main()
+
