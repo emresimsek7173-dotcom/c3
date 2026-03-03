@@ -12,7 +12,7 @@ from reportlab.lib.pagesizes import A4
 import io
 import datetime
 
-# --- SENİN SABİTLERİN ---
+# --- SENİN DOKUNULMAZ FORMÜLLERİN ---
 SENSOR_MESAFESI = 0.80  
 YUKSEKLIK_SABITI = 0.20 
 MAX_DEPTH = 10.0        
@@ -50,15 +50,10 @@ def create_pdf_reportlab(targets, mode):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    
-    # Başlık
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width/2, height - 50, "C3 GRADIOMETRE ANALIZ RAPORU")
-    
     c.setFont("Helvetica", 12)
     c.drawCentredString(width/2, height - 70, f"Tarih: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} | Mod: {mode}")
-    
-    # Tablo Çizimi
     y = height - 120
     c.setFont("Helvetica-Bold", 12)
     c.drawString(50, y, "Hedef #")
@@ -66,9 +61,7 @@ def create_pdf_reportlab(targets, mode):
     c.drawString(220, y, "Ileri (Sutun)")
     c.drawString(320, y, "Derinlik (m)")
     c.drawString(420, y, "Tip")
-    
     c.line(50, y-5, 550, y-5)
-    
     c.setFont("Helvetica", 11)
     for i, t in enumerate(targets):
         y -= 25
@@ -78,28 +71,31 @@ def create_pdf_reportlab(targets, mode):
         c.drawString(220, y, f"{t['y']:.1f}")
         c.drawString(320, y, f"{t['d']:.2f} m")
         c.drawString(420, y, tur)
-        
-    c.setFont("Helvetica-Oblique", 10)
-    c.drawString(50, 50, "* Bu rapor C3 Gradiometre yazilimi tarafindan otomatik uretilmistir.")
-    
     c.showPage()
     c.save()
     buffer.seek(0)
     return buffer
 
 def main():
-    st.set_page_config(page_title="C3 Ultimate ReportLab", layout="wide")
-    st.title("🛰️ C3 Gradiometre - Adım & Derinlik Analizi")
+    st.set_page_config(page_title="C3 Pro Full Panel", layout="wide")
+    st.title("🛰️ C3 Gradiometre - Gelişmiş Filtre & PDF")
 
     with st.sidebar:
         st.header("⚙️ Ayarlar")
         gain = st.slider("Hassasiyet (Gain)", 1, 1000, 300)
-        filt = st.slider("Esik Değeri", 0, 500, 30)
-        mode = st.radio("Analiz Tipi", ('Raw (Bosluk ve Metal)', 'Analytic (Sadece Hedef)', 'Gradient (Kenarlar)'))
+        filt = st.slider("Eşik (Threshold)", 0, 500, 30)
+        
         st.divider()
-        sharp = st.checkbox("Keskinlestirme Filtresi", value=True)
+        st.subheader("🖼️ Görüntü İşleme")
+        # --- BLUR VE MEDIAN GERİ GELDİ ---
+        blur_val = st.slider("Blur (Yumuşatma)", 0.0, 5.0, 1.0)
+        med_val = st.slider("Median (Parazit)", 0, 9, 3)
+        sharp = st.checkbox("Keskinleştirme (Sharpness)", value=True)
+        
+        st.divider()
+        mode = st.radio("Analiz Modu", ('Raw (Bosluk/Metal)', 'Analytic (Hedef)', 'Gradient (Kenar)'))
 
-    file = st.file_uploader("CSV Verisini Sec reisim", type=['csv'])
+    file = st.file_uploader("CSV Verisini Yükle", type=['csv'])
     
     if file:
         analiz = C3AnalizSistemi(file)
@@ -114,16 +110,24 @@ def main():
                       analiz.df['clean_diff'] * gain, (gx, gy), method='cubic', fill_value=0)
         zi = np.nan_to_num(zi)
 
+        # --- FİLTRE UYGULAMALARI ---
+        if med_val > 0:
+            m_size = int(med_val); m_size = m_size+1 if m_size%2==0 else m_size
+            zi = median_filter(zi, size=m_size)
+        
+        if blur_val > 0:
+            zi = gaussian_filter(zi, sigma=blur_val)
+
         if sharp:
-            blurred = gaussian_filter(zi, sigma=1)
-            zi = zi + (zi - blurred) * 2.0
+            blurred_for_sharp = gaussian_filter(zi, sigma=1.0)
+            zi = zi + (zi - blurred_for_sharp) * 1.5
             
         zi = np.where(np.abs(zi) < filt, 0, zi)
         
-        if mode == 'Analytic (Sadece Hedef)':
+        if mode == 'Analytic (Hedef)':
             dx, dy = sobel(zi, axis=1), sobel(zi, axis=0)
             zi = np.sqrt(np.square(dx) + np.square(dy) + np.square(zi))
-        elif mode == 'Gradient (Kenarlar)':
+        elif mode == 'Gradient (Kenar)':
             dx, dy = sobel(zi, axis=1), sobel(zi, axis=0)
             zi = np.sqrt(np.square(dx) + np.square(dy))
 
@@ -142,10 +146,10 @@ def main():
         for y in u_sutun: ax.axhline(y - 0.5, color='white', linestyle='-', alpha=0.3)
         ax.set_xticks(u_satir); ax.set_yticks(u_sutun)
         
-        plt.colorbar(im, label="Manyetik Siddet (nT)")
+        plt.colorbar(im, label="nT")
         st.pyplot(fig, use_container_width=True)
 
-        # --- HEDEF ANALİZİ ---
+        # --- HEDEF LİSTESİ ---
         threshold = (analiz.std_noise) * 4
         binary = np.abs(zi) > (threshold * (gain / 100))
         labeled, num = label(binary)
@@ -163,16 +167,16 @@ def main():
         # --- RAPORLAMA ---
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.subheader("🎯 Hedef Analiz Raporu")
+            st.subheader("🎯 Hedefler")
             for i, t in enumerate(targets):
-                tip = "🔵 BOSLUK / EKSI" if t['amp'] < 0 else "🔴 METAL / ARTI"
+                tip = "🔵 BOSLUK" if t['amp'] < 0 else "🔴 METAL"
                 st.info(f"**Hedef #{i+1}** | Adım: ({t['x']:.1f}, {t['y']:.1f}) | Derinlik: **{t['d']:.2f}m** | {tip}")
         
         with col2:
-            st.subheader("📄 PDF Indir")
-            if st.button("Raporu Hazirla"):
+            st.subheader("📄 PDF Rapor")
+            if st.button("Hazırla"):
                 pdf_data = create_pdf_reportlab(targets, mode)
-                st.download_button(label="📥 PDF Dosyasini Kaydet", data=pdf_data, 
+                st.download_button(label="📥 PDF İndir", data=pdf_data, 
                                    file_name=f"C3_Rapor_{datetime.datetime.now().strftime('%H%M')}.pdf", mime="application/pdf")
 
         # 3D
