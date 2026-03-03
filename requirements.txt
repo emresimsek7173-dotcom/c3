@@ -5,3 +5,4 @@ matplotlib
 scipy
 reportlab
 altair<5
+plotly
