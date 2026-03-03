@@ -45,8 +45,8 @@ class C3AnalizSistemi:
         return min(depth, MAX_DEPTH)
 
 def main():
-    st.set_page_config(page_title="C3 Pro Grid Fix", layout="wide")
-    st.title("🛰️ C3 Gradiometre - Tam Kare Analizi")
+    st.set_page_config(page_title="C3 Kesin Grid Fix", layout="wide")
+    st.title("🛰️ C3 Gradiometre - 9 Kare Manuel Grid")
 
     with st.sidebar:
         st.header("⚙️ Ayarlar")
@@ -92,25 +92,22 @@ def main():
         v_max = max(np.abs(zi).max(), 1.0)
         norm = TwoSlopeNorm(vmin=-v_max, vcenter=0, vmax=v_max) if mode == 'Raw' else Normalize(vmin=0, vmax=v_max)
         
-        # extent ile sınırları tam belirliyoruz
         im = ax.imshow(zi, extent=[analiz.df['satir'].min(), analiz.df['satir'].max(), 
                                    analiz.df['sutun'].min(), analiz.df['sutun'].max()], 
                        origin='lower', cmap='turbo', norm=norm, aspect='auto')
         
-        # --- 0'I DA ÇİZEN TAM GRID SİSTEMİ ---
+        # --- MANUEL GRID ÇİZİMİ (KESİN ÇÖZÜM) ---
         u_satir = sorted(analiz.df['satir'].unique())
         u_sutun = sorted(analiz.df['sutun'].unique())
         
-        # Çizgilerin konumlarını tam adımlara (0 dahil) setliyoruz
+        # Her bir adım için manuel beyaz çizgi çekiyoruz
+        for x in u_satir:
+            ax.axvline(x, color='white', linestyle='--', alpha=0.6, linewidth=1)
+        for y in u_sutun:
+            ax.axhline(y, color='white', linestyle='--', alpha=0.6, linewidth=1)
+            
         ax.set_xticks(u_satir)
         ax.set_yticks(u_sutun)
-        
-        # Grid çizgilerini beyaz ve belirgin yapıyoruz
-        ax.grid(which='both', color='white', linestyle='-', alpha=0.6, linewidth=1.5)
-        # Kenar çizgilerini (0 ve son adım) görünür yapıyoruz
-        for spine in ax.spines.values():
-            spine.set_visible(True)
-            spine.set_color('white')
             
         plt.colorbar(im, ax=ax, label="Şiddet")
         ax.set_xlabel("YAN ADIM (Satir)"); ax.set_ylabel("İLERİ ADIM (Sutun)")
@@ -130,12 +127,8 @@ def main():
             val = zi[mask].mean()
             coords = np.argwhere(mask)
             y_idx, x_idx = coords.mean(axis=0).astype(int)
-            
-            # Adım koordinatlarını net alıyoruz
-            adim_yan = xi[min(x_idx, len(xi)-1)]
-            adim_ileri = yi[min(y_idx, len(yi)-1)]
             d = analiz.calculate_depth(val/gain)
-            targets.append({'amp': val, 'x': adim_yan, 'y': adim_ileri, 'd': d})
+            targets.append({'amp': val, 'x': xi[x_idx], 'y': yi[y_idx], 'd': d})
         
         for i, t in enumerate(sorted(targets, key=lambda x: abs(x['amp']), reverse=True)[:5]):
             st.info(f"🟢 **Hedef {i+1}:** Yan: **{t['x']:.1f}**. Adım | İleri: **{t['y']:.1f}**. Adım | Derinlik: **{t['d']:.2f} m**")
