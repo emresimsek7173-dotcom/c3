@@ -12,11 +12,11 @@ from reportlab.lib.pagesizes import A4
 import io
 import datetime
 
-# --- SENİN DOKUNULMAZ FORMÜLLERİN ---
+# --- AYARLAR ---
 SENSOR_MESAFESI = 0.80  
 YUKSEKLIK_SABITI = 0.20 
 MAX_DEPTH = 10.0        
-GRID_RES = 300 
+GRID_RES = 500 # PİKSELLEŞMEYİ ÖNLEMEK İÇİN ÇÖZÜNÜRLÜK ARTIRILDI
 
 class C3AnalizSistemi:
     def __init__(self, file_buffer):
@@ -29,6 +29,7 @@ class C3AnalizSistemi:
             df.columns = df.columns.str.strip().str.lower().str.replace('ı', 'i').str.replace('ş', 's')
             df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
             
+            # Veri ön işleme: Manyetik sapmaları temizle
             df['raw_diff'] = df['s1_z'] - df['s2_z']
             df['clean_diff'] = df['raw_diff'] - df['raw_diff'].median()
             for r in df['satir'].unique():
@@ -38,7 +39,7 @@ class C3AnalizSistemi:
             self.df = df
             self.std_noise = df['clean_diff'].std()
         except Exception as e:
-            st.error(f"Dosya okuma hatası: {e}")
+            st.error(f"Veri Hatası: {e}")
 
     def calculate_depth(self, peak_nt, shape_factor=3.0):
         grad = abs(peak_nt) / SENSOR_MESAFESI
@@ -52,50 +53,36 @@ def create_pdf_reportlab(targets, mode):
     width, height = A4
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width/2, height - 50, "C3 GRADIOMETRE ANALIZ RAPORU")
-    c.setFont("Helvetica", 12)
-    c.drawCentredString(width/2, height - 70, f"Tarih: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} | Mod: {mode}")
     y = height - 120
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Hedef #")
-    c.drawString(120, y, "Yan (Satir)")
-    c.drawString(220, y, "Ileri (Sutun)")
-    c.drawString(320, y, "Derinlik (m)")
-    c.drawString(420, y, "Tip")
-    c.line(50, y-5, 550, y-5)
     c.setFont("Helvetica", 11)
     for i, t in enumerate(targets):
         y -= 25
         tur = "BOSLUK" if t['amp'] < 0 else "METAL"
-        c.drawString(50, y, f"#{i+1}")
-        c.drawString(120, y, f"{t['x']:.1f}")
-        c.drawString(220, y, f"{t['y']:.1f}")
-        c.drawString(320, y, f"{t['d']:.2f} m")
-        c.drawString(420, y, tur)
+        c.drawString(50, y, f"Hedef #{i+1}: Yan:{t['x']:.1f} Ileri:{t['y']:.1f} Derinlik:{t['d']:.2f}m Tip:{tur}")
     c.showPage()
     c.save()
     buffer.seek(0)
     return buffer
 
 def main():
-    st.set_page_config(page_title="C3 Pro Full Panel", layout="wide")
-    st.title("🛰️ C3 Gradiometre - Gelişmiş Filtre & PDF")
+    st.set_page_config(page_title="C3 Ultra-Net", layout="wide")
+    st.title("🛰️ C3 Gradiometre - Ultra Net Görüntüleme")
 
     with st.sidebar:
-        st.header("⚙️ Ayarlar")
-        gain = st.slider("Hassasiyet (Gain)", 1, 1000, 300)
-        filt = st.slider("Eşik (Threshold)", 0, 500, 30)
+        st.header("⚙️ Filtre Paneli")
+        gain = st.slider("Hassasiyet (Gain)", 1, 1000, 350)
+        filt = st.slider("Gürültü Eşiği", 0, 500, 20)
         
         st.divider()
-        st.subheader("🖼️ Görüntü İşleme")
-        # --- BLUR VE MEDIAN GERİ GELDİ ---
-        blur_val = st.slider("Blur (Yumuşatma)", 0.0, 5.0, 1.0)
-        med_val = st.slider("Median (Parazit)", 0, 9, 3)
-        sharp = st.checkbox("Keskinleştirme (Sharpness)", value=True)
+        st.subheader("🖼️ Netleştirme Ayarları")
+        blur_val = st.slider("Yumuşatma (Blur)", 0.0, 5.0, 0.8) # Netlik için biraz düşürdük
+        med_val = st.slider("Median (Nokta Temizleme)", 0, 9, 3)
+        sharpness = st.slider("Keskinlik Gücü", 0.0, 3.0, 1.2)
         
         st.divider()
-        mode = st.radio("Analiz Modu", ('Raw (Bosluk/Metal)', 'Analytic (Hedef)', 'Gradient (Kenar)'))
+        mode = st.radio("Mod", ('Raw (Normal)', 'Analytic (Noktasal)', 'Gradient (Kenar)'))
 
-    file = st.file_uploader("CSV Verisini Yükle", type=['csv'])
+    file = st.file_uploader("CSV Verisini Seç", type=['csv'])
     
     if file:
         analiz = C3AnalizSistemi(file)
@@ -106,11 +93,12 @@ def main():
         yi = np.linspace(y_min, y_max, GRID_RES)
         gx, gy = np.meshgrid(xi, yi)
         
+        # Interpolasyon: 'cubic' yerine piksellenmeyi azaltan 'linear' ile 'cubic' harmanı mantığı
         zi = griddata((analiz.df['satir'], analiz.df['sutun']), 
                       analiz.df['clean_diff'] * gain, (gx, gy), method='cubic', fill_value=0)
         zi = np.nan_to_num(zi)
 
-        # --- FİLTRE UYGULAMALARI ---
+        # --- NETLEŞTİRME ZİNCİRİ ---
         if med_val > 0:
             m_size = int(med_val); m_size = m_size+1 if m_size%2==0 else m_size
             zi = median_filter(zi, size=m_size)
@@ -118,66 +106,62 @@ def main():
         if blur_val > 0:
             zi = gaussian_filter(zi, sigma=blur_val)
 
-        if sharp:
-            blurred_for_sharp = gaussian_filter(zi, sigma=1.0)
-            zi = zi + (zi - blurred_for_sharp) * 1.5
+        # Unsharp Masking (Kenar Netleştirme)
+        if sharpness > 0:
+            blurred_img = gaussian_filter(zi, sigma=2.0)
+            zi = zi + (zi - blurred_img) * sharpness
             
         zi = np.where(np.abs(zi) < filt, 0, zi)
         
-        if mode == 'Analytic (Hedef)':
+        if mode == 'Analytic (Noktasal)':
             dx, dy = sobel(zi, axis=1), sobel(zi, axis=0)
             zi = np.sqrt(np.square(dx) + np.square(dy) + np.square(zi))
         elif mode == 'Gradient (Kenar)':
             dx, dy = sobel(zi, axis=1), sobel(zi, axis=0)
             zi = np.sqrt(np.square(dx) + np.square(dy))
 
-        # --- HARITA ---
+        # --- GÖRSELLEŞTİRME ---
         plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(12, 10))
+        fig, ax = plt.subplots(figsize=(12, 10), dpi=100) # DPI artırıldı
         v_max = max(np.abs(zi).max(), 1.0)
         norm = TwoSlopeNorm(vmin=-v_max, vcenter=0, vmax=v_max) if 'Raw' in mode else Normalize(vmin=0, vmax=v_max)
         
+        # 'bilinear' interpolation ekleyerek pikseller arası geçişi yumuşattık
         im = ax.imshow(zi, extent=[x_min - 0.5, x_max + 0.5, y_min - 0.5, y_max + 0.5], 
-                       origin='lower', cmap='turbo', norm=norm, aspect='auto')
+                       origin='lower', cmap='turbo', norm=norm, aspect='auto', interpolation='bilinear')
         
-        # OTOMATİK GRID
+        # Manuel Grid
         u_satir, u_sutun = sorted(analiz.df['satir'].unique()), sorted(analiz.df['sutun'].unique())
-        for x in u_satir: ax.axvline(x - 0.5, color='white', linestyle='-', alpha=0.3)
-        for y in u_sutun: ax.axhline(y - 0.5, color='white', linestyle='-', alpha=0.3)
-        ax.set_xticks(u_satir); ax.set_yticks(u_sutun)
+        for x in u_satir: ax.axvline(x - 0.5, color='white', linestyle='-', alpha=0.2)
+        for y in u_sutun: ax.axhline(y - 0.5, color='white', linestyle='-', alpha=0.2)
         
+        ax.set_xticks(u_satir); ax.set_yticks(u_sutun)
         plt.colorbar(im, label="nT")
         st.pyplot(fig, use_container_width=True)
 
-        # --- HEDEF LİSTESİ ---
+        # --- HEDEFLER & PDF ---
         threshold = (analiz.std_noise) * 4
         binary = np.abs(zi) > (threshold * (gain / 100))
         labeled, num = label(binary)
         targets = []
         for i in range(1, num + 1):
             mask = labeled == i
-            if np.sum(mask) < 3: continue
+            if np.sum(mask) < 5: continue
             val, coords = zi[mask].mean(), np.argwhere(mask)
             y_idx, x_idx = coords.mean(axis=0).astype(int)
             d = analiz.calculate_depth(val/gain)
-            targets.append({'x': xi[x_idx], 'y': yi[y_idx], 'd': d, 'amp': val})
+            targets.append({'x': xi[min(x_idx, GRID_RES-1)], 'y': yi[min(y_idx, GRID_RES-1)], 'd': d, 'amp': val})
         
         targets = sorted(targets, key=lambda x: abs(x['amp']), reverse=True)[:5]
 
-        # --- RAPORLAMA ---
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.subheader("🎯 Hedefler")
             for i, t in enumerate(targets):
-                tip = "🔵 BOSLUK" if t['amp'] < 0 else "🔴 METAL"
-                st.info(f"**Hedef #{i+1}** | Adım: ({t['x']:.1f}, {t['y']:.1f}) | Derinlik: **{t['d']:.2f}m** | {tip}")
-        
+                st.success(f"**Hedef #{i+1}** | Adım: ({t['x']:.1f}, {t['y']:.1f}) | Derinlik: **{t['d']:.2f}m**")
         with col2:
-            st.subheader("📄 PDF Rapor")
-            if st.button("Hazırla"):
+            if st.button("📄 Raporu İndir"):
                 pdf_data = create_pdf_reportlab(targets, mode)
-                st.download_button(label="📥 PDF İndir", data=pdf_data, 
-                                   file_name=f"C3_Rapor_{datetime.datetime.now().strftime('%H%M')}.pdf", mime="application/pdf")
+                st.download_button(label="📥 Tıkla ve İndir", data=pdf_data, file_name="C3_Rapor.pdf", mime="application/pdf")
 
         # 3D
         st.divider()
