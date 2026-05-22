@@ -71,11 +71,9 @@ def veri_isle(df):
                   .str.replace('ö','o').str.replace('ç','c'))
     df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
 
-    # TFA: √(X²+Y²+Z²)
     df['tfa1'] = np.sqrt(df['s1_x']**2 + df['s1_y']**2 + df['s1_z']**2)
     df['tfa2'] = np.sqrt(df['s2_x']**2 + df['s2_y']**2 + df['s2_z']**2)
 
-    # Spike temizle
     for col in ['tfa1','tfa2','s1_z','s2_z']:
         lo, hi = df[col].quantile(0.02), df[col].quantile(0.98)
         df[col] = df[col].clip(lo, hi)
@@ -83,7 +81,6 @@ def veri_isle(df):
     df['tfa_diff'] = df['tfa1'] - df['tfa2']
     df['z_diff']   = df['s1_z'] - df['s2_z']
 
-    # Satır bazlı detrend
     for col in ['tfa_diff','z_diff']:
         df[col] -= df[col].median()
         for r in df['satir'].unique():
@@ -94,6 +91,7 @@ def veri_isle(df):
     return df
 
 def olustur_grid(df, veri_col, gain_val):
+    # xi=satir (Y/dikey/kuzey), yi=sutun (X/yatay/dogu) — interpolasyon değişmedi
     xi = np.linspace(df['satir'].min(), df['satir'].max(), GRID_RES)
     yi = np.linspace(df['sutun'].min(), df['sutun'].max(), GRID_RES)
     gx, gy = np.meshgrid(xi, yi)
@@ -179,7 +177,7 @@ def rapor_olustur(df, targets, std_noise, sigma_val, mode_str, filename):
     ]
     for t in targets:
         d = derinlik(t['amp'])
-        lines.append(f"H{t['id']:02d}  X:{t['x']:.2f}  Y:{t['y']:.2f}  Şiddet:{t['amp']:.1f}nT  ~{d:.2f}m")
+        lines.append(f"H{t['id']:02d}  Satır:{t['x']:.2f}  Sütun:{t['y']:.2f}  Şiddet:{t['amp']:.1f}nT  ~{d:.2f}m")
     if not targets:
         lines.append("Kayda değer anomali tespit edilmedi.")
     lines += ["","="*50,"--- Rapor Sonu ---"]
@@ -263,7 +261,8 @@ with col_map:
     else:
         norm = Normalize(vmin=zmin, vmax=zmax)
 
-    im = ax2d.imshow(zi, extent=[xi.min(),xi.max(),yi.min(),yi.max()],
+    # extent=[xmin,xmax,ymin,ymax] → X(yatay/sağ)=sutun(yi), Y(dikey/yukarı)=satir(xi)
+    im = ax2d.imshow(zi, extent=[yi.min(), yi.max(), xi.min(), xi.max()],
                      origin='lower', cmap=C3_CMAP, norm=norm,
                      aspect='auto', interpolation='bilinear')
     cb = plt.colorbar(im, ax=ax2d, fraction=0.03)
@@ -271,19 +270,19 @@ with col_map:
     cb.ax.yaxis.set_tick_params(color='#555', labelsize=7)
     plt.setp(cb.ax.yaxis.get_ticklabels(), color='#aaa')
 
+    # Hedef işaretleri: t['x']=satir(Y ekseni), t['y']=sutun(X ekseni)
     for t in targets:
-        ax2d.plot(t['x'], t['y'], 'w+', ms=14, mew=2)
-        ax2d.text(t['x']+0.05, t['y']+0.05, f"H{t['id']}",
+        ax2d.plot(t['y'], t['x'], 'w+', ms=14, mew=2)
+        ax2d.text(t['y']+0.05, t['x']+0.05, f"H{t['id']}",
                   color='white', fontsize=10, weight='bold',
                   bbox=dict(boxstyle='round,pad=0.2', fc='#00000088', ec='none'))
 
-    # Başlangıç noktası
-    x0, y0 = df['satir'].min(), df['sutun'].min()
-    ax2d.plot(x0, y0, '*', color='yellow', ms=14, zorder=5)
-    ax2d.text(x0, y0, ' ★BAŞLANGIÇ', color='yellow', fontsize=8, weight='bold')
+    # Başlangıç: sol alt → X=sutun.min(), Y=satir.min()
+    ax2d.plot(df['sutun'].min(), df['satir'].min(), '*', color='yellow', ms=14, zorder=5)
+    ax2d.text(df['sutun'].min(), df['satir'].min(), ' ★BAŞLANGIÇ', color='yellow', fontsize=8, weight='bold')
 
-    ax2d.set_xlabel("Satır →", color='#666', fontsize=9)
-    ax2d.set_ylabel("Sütun ↑", color='#666', fontsize=9)
+    ax2d.set_xlabel("Sütun →", color='#666', fontsize=9)
+    ax2d.set_ylabel("Satır ↑", color='#666', fontsize=9)
     ax2d.tick_params(colors='#444')
     for sp in ax2d.spines.values(): sp.set_edgecolor('#222')
     plt.tight_layout()
@@ -301,14 +300,13 @@ with col_panel:
             bar = guc_bar(t['amp'], max_amp)
             st.markdown(f"""<div class='hedef'>
             <b style='color:#00FF9D;font-size:15px;'>H{t['id']}</b>
-            &nbsp; X:{t['x']:.1f} · Y:{t['y']:.1f}<br>
+            &nbsp; Satır:{t['x']:.1f} · Sütun:{t['y']:.1f}<br>
             Şiddet : <b>{t['amp']:.1f} nT</b><br>
             Derinlik: <b>~{d:.2f} m</b><br>
             Güç : <span style='color:#FFD700;'>[{bar}]</span>
             </div>""", unsafe_allow_html=True)
 
     st.markdown("---")
-    # Gürültü analizi kutusu
     st.markdown(f"""<div style='font-family:monospace;font-size:12px;
     background:#0d0d1a;padding:10px;border-radius:6px;border:1px solid #333;'>
     <b style='color:#00FF9D;'>── GÜRÜLTÜ ANALİZİ ──</b><br>
@@ -321,14 +319,14 @@ with col_panel:
 
 st.markdown("---")
 
-# ── KESİT PROFİLLERİ (en güçlü hedef) ─────────────────────
+# ── KESİT PROFİLLERİ ───────────────────────────────────────
 if targets:
     st.subheader("📈 Kesit Profilleri — H1 (En Güçlü Hedef)")
     t0 = targets[0]
-    ri = np.argmin(np.abs(yi - t0['y']))
-    ci = np.argmin(np.abs(xi - t0['x']))
-    x_prof = zi[ri, :]
-    y_prof = zi[:, ci]
+    ri = np.argmin(np.abs(xi - t0['x']))  # satir ekseni (Y)
+    ci = np.argmin(np.abs(yi - t0['y']))  # sutun ekseni (X)
+    x_prof = zi[ri, :]   # sabit satırda, sutun boyunca
+    y_prof = zi[:, ci]   # sabit sütunda, satir boyunca
     val0   = zi[ri, ci]
 
     durum, renk, aciklama = ai_yorum(x_prof, val0, k_esik, mode)
@@ -338,10 +336,11 @@ if targets:
         fig_xp, ax_xp = plt.subplots(figsize=(6,2.5))
         fig_xp.patch.set_facecolor('#0a0a0f')
         ax_xp.set_facecolor('#0d0d0d')
-        ax_xp.plot(xi, x_prof, color='#FFD700', lw=1.5)
+        ax_xp.plot(yi, x_prof, color='#FFD700', lw=1.5)
         ax_xp.axhline(0, color='#333', lw=0.5)
-        ax_xp.axvline(t0['x'], color='#FF4500', lw=1, ls='--')
-        ax_xp.set_title("X Kesiti (Doğu-Batı)", color='#00FF9D', fontsize=9)
+        ax_xp.axvline(t0['y'], color='#FF4500', lw=1, ls='--')
+        ax_xp.set_title("Sütun Kesiti (Doğu-Batı)", color='#00FF9D', fontsize=9)
+        ax_xp.set_xlabel("Sütun →", color='#666', fontsize=8)
         ax_xp.tick_params(colors='#444', labelsize=7)
         for sp in ax_xp.spines.values(): sp.set_edgecolor('#222')
         plt.tight_layout()
@@ -351,16 +350,16 @@ if targets:
         fig_yp, ax_yp = plt.subplots(figsize=(6,2.5))
         fig_yp.patch.set_facecolor('#0a0a0f')
         ax_yp.set_facecolor('#0d0d0d')
-        ax_yp.plot(yi, y_prof, color='#00CFFF', lw=1.5)
+        ax_yp.plot(xi, y_prof, color='#00CFFF', lw=1.5)
         ax_yp.axhline(0, color='#333', lw=0.5)
-        ax_yp.axvline(t0['y'], color='#FF4500', lw=1, ls='--')
-        ax_yp.set_title("Y Kesiti (Kuzey-Güney)", color='#00FF9D', fontsize=9)
+        ax_yp.axvline(t0['x'], color='#FF4500', lw=1, ls='--')
+        ax_yp.set_title("Satır Kesiti (Kuzey-Güney)", color='#00FF9D', fontsize=9)
+        ax_yp.set_xlabel("Satır ↑", color='#666', fontsize=8)
         ax_yp.tick_params(colors='#444', labelsize=7)
         for sp in ax_yp.spines.values(): sp.set_edgecolor('#222')
         plt.tight_layout()
         st.pyplot(fig_yp)
 
-    # AI yorum
     st.markdown(f"""<div style='padding:12px;background:#0a1a0f;
     border:1px solid {renk}55;border-radius:8px;font-family:monospace;margin-top:8px;'>
     <span style='color:#888;font-size:12px;'>🤖 AI TEŞHİS (H1)</span><br>
@@ -374,22 +373,22 @@ st.markdown("---")
 st.subheader("🧊 3D İnteraktif Topografya")
 st.caption("💡 Mouse ile döndür · Tekerlek ile yakınlaş · Hover ile değer gör")
 
+# 3D: X=sutun(yi), Y=satir(xi)
 fig3d = go.Figure(data=[go.Surface(
-    z=zi, x=xi, y=yi,
+    z=zi, x=yi, y=xi,
     colorscale=[
-        [0.0,   '#0000AA'], [0.2,  '#0066FF'],
-        [0.35,  '#00CCFF'], [0.5,  '#00CC44'],
-        [0.65,  '#FFFF00'], [0.8,  '#FF6600'],
-        [1.0,   '#CC0000']
+        [0.0,  '#0000AA'], [0.2,  '#0066FF'],
+        [0.35, '#00CCFF'], [0.5,  '#00CC44'],
+        [0.65, '#FFFF00'], [0.8,  '#FF6600'],
+        [1.0,  '#CC0000']
     ],
     opacity=0.95
 )])
 
-# Hedefler 3D üzerinde
 if targets:
     fig3d.add_trace(go.Scatter3d(
-        x=[t['x'] for t in targets],
-        y=[t['y'] for t in targets],
+        x=[t['y'] for t in targets],   # sutun → X
+        y=[t['x'] for t in targets],   # satir → Y
         z=[t['amp'] for t in targets],
         mode='markers+text',
         marker=dict(size=6, color='white', symbol='cross'),
@@ -398,9 +397,8 @@ if targets:
         name='Hedefler'
     ))
 
-# Başlangıç noktası 3D
 fig3d.add_trace(go.Scatter3d(
-    x=[df['satir'].min()], y=[df['sutun'].min()], z=[0],
+    x=[df['sutun'].min()], y=[df['satir'].min()], z=[0],
     mode='markers+text',
     marker=dict(size=8, color='yellow'),
     text=['★BAŞLANGIÇ'], textfont=dict(color='yellow', size=10),
@@ -409,8 +407,8 @@ fig3d.add_trace(go.Scatter3d(
 
 fig3d.update_layout(
     scene=dict(
-        xaxis_title='SATIR (Doğu →)',
-        yaxis_title='SUTUN (Kuzey ↑)',
+        xaxis_title='SUTUN (Doğu →)',
+        yaxis_title='SATIR (Kuzey ↑)',
         zaxis_title='Şiddet (nT)',
         xaxis=dict(backgroundcolor='#0a0a0f', gridcolor='#1a1a2e', color='#666'),
         yaxis=dict(backgroundcolor='#0a0a0f', gridcolor='#1a1a2e', color='#666'),
