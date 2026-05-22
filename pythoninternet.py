@@ -125,8 +125,8 @@ def hedef_tespit(zi, xi, yi, kullanilan_esik):
         peak = np.argmax(np.abs(zi[mask]))
         py, px = coords[peak]
         py, px = min(py, GRID_RES-1), min(px, GRID_RES-1)
-        targets.append({'id':i, 'x':xi[min(px,len(xi)-1)],
-                        'y':yi[min(py,len(yi)-1)], 'amp':zi[py,px]})
+        targets.append({'id':i, 'x':xi[min(py,len(xi)-1)],
+                        'y':yi[min(px,len(yi)-1)], 'amp':zi[py,px]})
     return sorted(targets, key=lambda t: abs(t['amp']), reverse=True)[:6]
 
 def derinlik(peak_nt):
