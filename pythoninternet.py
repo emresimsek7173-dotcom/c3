@@ -91,13 +91,14 @@ def veri_isle(df):
     return df
 
 def olustur_grid(df, veri_col, gain_val):
-    # xi=satir (Y/dikey/kuzey), yi=sutun (X/yatay/dogu) — interpolasyon değişmedi
+    # xi=satir (Y/dikey/kuzey), yi=sutun (X/yatay/dogu)
     xi = np.linspace(df['satir'].min(), df['satir'].max(), GRID_RES)
     yi = np.linspace(df['sutun'].min(), df['sutun'].max(), GRID_RES)
     gx, gy = np.meshgrid(xi, yi)
     zi = griddata((df['satir'], df['sutun']), df[veri_col]*gain_val,
                   (gx, gy), method='linear', fill_value=0)
-    return xi, yi, gx, gy, zi
+    # .T: meshgrid satir/sutun eksenlerini yer değiştiriyor, transpose ile düzelt
+    return xi, yi, gx, gy, zi.T
 
 def filtrele(zi, std_noise, gain_val, esik_val, blur_val, med_val, sigma_val, mode_str):
     if med_val > 1:
@@ -257,7 +258,10 @@ with col_map:
 
     zmin, zmax = zi.min(), zi.max()
     if zmin < 0 < zmax:
-        norm = TwoSlopeNorm(vmin=zmin, vcenter=0, vmax=zmax)
+        nonzero = zi[zi != 0]
+        p_hi = np.percentile(np.abs(nonzero), 98) if len(nonzero) > 0 else max(abs(zmin), abs(zmax))
+        sym = max(p_hi, 0.001)
+        norm = TwoSlopeNorm(vmin=-sym, vcenter=0, vmax=sym)
     else:
         norm = Normalize(vmin=zmin, vmax=zmax)
 
