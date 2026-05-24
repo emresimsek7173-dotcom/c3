@@ -34,6 +34,8 @@ h1,h2,h3 { color:#00FF9D; font-family:'Courier New',monospace; }
 .hedef { background:#0d1f1a; border-left:3px solid #00FF9D; padding:8px 12px; margin:4px 0; border-radius:4px; font-family:monospace; font-size:13px; }
 .uyari { background:#1a0a0a; border-left:3px solid #FF4444; padding:10px; border-radius:4px; font-family:monospace; }
 .anomali { background:#0a1a0a; border-left:3px solid #00FF9D; padding:10px; border-radius:4px; font-family:monospace; }
+.faz-panel { background:#0d1a2e; border-left:3px solid #00CFFF; padding:10px 14px; border-radius:6px; font-family:monospace; font-size:13px; margin:4px 0; }
+.siv-panel { background:#1a0d2e; border-left:3px solid #FF00FF; padding:10px 14px; border-radius:6px; font-family:monospace; font-size:13px; margin:4px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,34 +72,27 @@ def veri_isle(df):
                   .str.replace('ğ','g').str.replace('ü','u')
                   .str.replace('ö','o').str.replace('ç','c'))
     df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
-
     df['tfa1'] = np.sqrt(df['s1_x']**2 + df['s1_y']**2 + df['s1_z']**2)
     df['tfa2'] = np.sqrt(df['s2_x']**2 + df['s2_y']**2 + df['s2_z']**2)
-
     for col in ['tfa1','tfa2','s1_z','s2_z']:
         lo, hi = df[col].quantile(0.02), df[col].quantile(0.98)
         df[col] = df[col].clip(lo, hi)
-
     df['tfa_diff'] = df['tfa1'] - df['tfa2']
     df['z_diff']   = df['s1_z'] - df['s2_z']
-
     for col in ['tfa_diff','z_diff']:
         df[col] -= df[col].median()
         for r in df['satir'].unique():
             m = df['satir'] == r
             if m.sum() > 5:
                 df.loc[m, col] = detrend(df.loc[m, col], type='linear')
-
     return df
 
 def olustur_grid(df, veri_col, gain_val):
-    # xi=satir (Y/dikey/kuzey), yi=sutun (X/yatay/dogu)
     xi = np.linspace(df['satir'].min(), df['satir'].max(), GRID_RES)
     yi = np.linspace(df['sutun'].min(), df['sutun'].max(), GRID_RES)
     gx, gy = np.meshgrid(xi, yi)
     zi = griddata((df['satir'], df['sutun']), df[veri_col]*gain_val,
                   (gx, gy), method='linear', fill_value=0)
-    # .T: meshgrid satir/sutun eksenlerini yer değiştiriyor, transpose ile düzelt
     return xi, yi, gx, gy, zi.T
 
 def filtrele(zi, std_noise, gain_val, esik_val, blur_val, med_val, sigma_val, mode_str):
@@ -155,11 +150,65 @@ def ai_yorum(x_prof, val, esik_val, mode_str):
     if hp: return "YÜZEY METALİ","#FF6B35","Yüzeye yakın metal."
     return "BELİRSİZ","#888888","Form tanımlanamadı."
 
+def faz_kaymasi(x_prof):
+    """Raw mavi çukur merkezi ile Analitik tepe örtüşmesini hesaplar."""
+    try:
+        neg_mask = x_prof < 0
+        if neg_mask.sum() < 2:
+            return 0.0, "Negatif bölge yok", "#888888"
+        neg_idx = np.where(neg_mask)[0]
+        cukur_merkez = int(np.mean(neg_idx))
+        analitik = np.sqrt(np.gradient(x_prof)**2 + x_prof**2)
+        tepe_merkez = int(np.argmax(analitik))
+        n = len(x_prof)
+        mesafe = abs(tepe_merkez - cukur_merkez)
+        ortusme = max(0.0, 1.0 - mesafe / (n * 0.3))
+        if ortusme > 0.80:
+            yorum = "Manyetik olmayan kütle / boşluk"
+            renk = "#00CFFF"
+        elif ortusme > 0.50:
+            yorum = "Karışık sinyal / belirsiz"
+            renk = "#FFD700"
+        else:
+            yorum = "Demir dipol kalıntısı"
+            renk = "#FF4444"
+        return ortusme, yorum, renk
+    except Exception:
+        return 0.0, "Hesaplanamadı", "#888888"
+
+def tepe_sivrilik(x_prof, xi):
+    """FWHM (yarı yükseklik genişliği) ile tepe karakterini ölçer."""
+    try:
+        analitik = np.sqrt(np.gradient(x_prof)**2 + x_prof**2)
+        tepe_val = analitik.max()
+        if tepe_val < 1e-6:
+            return None, "Tepe yok", "#888888"
+        yari = tepe_val * 0.5
+        ustu = analitik >= yari
+        idx = np.where(ustu)[0]
+        if len(idx) < 2:
+            return None, "Tepe çok dar", "#888888"
+        adim = (xi[-1] - xi[0]) / len(xi)
+        fwhm = (idx[-1] - idx[0]) * adim
+        if fwhm < 0.3:
+            form = "Sivri → Küçük yoğun kütle (sikke/kap/obje)"
+            renk = "#FF00FF"
+        elif fwhm < 0.8:
+            form = "Orta → Hacimli kütle (sandık/küp)"
+            renk = "#FFA500"
+        else:
+            form = "Yayvan → Büyük yapı (duvar/horasan/oda)"
+            renk = "#00CFFF"
+        return fwhm, form, renk
+    except Exception:
+        return None, "Hesaplanamadı", "#888888"
+
 def guc_bar(amp, max_amp):
     g = int(abs(amp) / max(max_amp,1e-5) * 10)
     return '█'*g + '░'*(10-g)
 
-def rapor_olustur(df, targets, std_noise, sigma_val, mode_str, filename):
+def rapor_olustur(df, targets, std_noise, sigma_val, mode_str, filename,
+                  ortusme=None, faz_yorum=None, fwhm=None, siv_form=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines = [
         "="*50,
@@ -181,6 +230,24 @@ def rapor_olustur(df, targets, std_noise, sigma_val, mode_str, filename):
         lines.append(f"H{t['id']:02d}  Satır:{t['x']:.2f}  Sütun:{t['y']:.2f}  Şiddet:{t['amp']:.1f}nT  ~{d:.2f}m")
     if not targets:
         lines.append("Kayda değer anomali tespit edilmedi.")
+    if ortusme is not None:
+        lines += [
+            "",
+            "-"*50,
+            "H1 FAZ KAYMASI ANALİZİ:",
+            "-"*50,
+            f"Örtüşme : %{int(ortusme*100)}",
+            f"Yorum   : {faz_yorum}",
+        ]
+    if fwhm is not None:
+        lines += [
+            "",
+            "-"*50,
+            "H1 TEPE KARAKTERİ:",
+            "-"*50,
+            f"Genişlik (FWHM): {fwhm:.2f} m",
+            f"Form    : {siv_form}",
+        ]
     lines += ["","="*50,"--- Rapor Sonu ---"]
     return "\n".join(lines)
 
@@ -265,7 +332,6 @@ with col_map:
     else:
         norm = Normalize(vmin=zmin, vmax=zmax)
 
-    # extent=[xmin,xmax,ymin,ymax] → X(yatay/sağ)=sutun(yi), Y(dikey/yukarı)=satir(xi)
     im = ax2d.imshow(zi, extent=[yi.min(), yi.max(), xi.min(), xi.max()],
                      origin='lower', cmap=C3_CMAP, norm=norm,
                      aspect='auto', interpolation='bilinear')
@@ -274,17 +340,14 @@ with col_map:
     cb.ax.yaxis.set_tick_params(color='#555', labelsize=7)
     plt.setp(cb.ax.yaxis.get_ticklabels(), color='#aaa')
 
-    # Hedef işaretleri: t['x']=satir(Y ekseni), t['y']=sutun(X ekseni)
     for t in targets:
         ax2d.plot(t['y'], t['x'], 'w+', ms=14, mew=2)
         ax2d.text(t['y']+0.05, t['x']+0.05, f"H{t['id']}",
                   color='white', fontsize=10, weight='bold',
                   bbox=dict(boxstyle='round,pad=0.2', fc='#00000088', ec='none'))
 
-    # Başlangıç: sol alt → X=sutun.min(), Y=satir.min()
     ax2d.plot(df['sutun'].min(), df['satir'].min(), '*', color='yellow', ms=14, zorder=5)
     ax2d.text(df['sutun'].min(), df['satir'].min(), ' ★BAŞLANGIÇ', color='yellow', fontsize=8, weight='bold')
-
     ax2d.set_xlabel("Sütun →", color='#666', fontsize=9)
     ax2d.set_ylabel("Satır ↑", color='#666', fontsize=9)
     ax2d.tick_params(colors='#444')
@@ -294,7 +357,6 @@ with col_map:
 
 with col_panel:
     st.subheader("🎯 Hedef Listesi")
-
     if not targets:
         st.warning("Anomali yok. Sigmayı düşür veya kazancı artır.")
     else:
@@ -323,17 +385,23 @@ with col_panel:
 
 st.markdown("---")
 
-# ── KESİT PROFİLLERİ ───────────────────────────────────────
+# ── KESİT PROFİLLERİ + FAZ + SİVRİLİK ─────────────────────
+ortusme_r = faz_yorum_r = fwhm_r = siv_form_r = siv_renk_r = faz_renk_r = None
+
 if targets:
     st.subheader("📈 Kesit Profilleri — H1 (En Güçlü Hedef)")
     t0 = targets[0]
-    ri = np.argmin(np.abs(xi - t0['x']))  # satir ekseni (Y)
-    ci = np.argmin(np.abs(yi - t0['y']))  # sutun ekseni (X)
-    x_prof = zi[ri, :]   # sabit satırda, sutun boyunca
-    y_prof = zi[:, ci]   # sabit sütunda, satir boyunca
+    ri = np.argmin(np.abs(xi - t0['x']))
+    ci = np.argmin(np.abs(yi - t0['y']))
+    x_prof = zi[ri, :]
+    y_prof = zi[:, ci]
     val0   = zi[ri, ci]
 
     durum, renk, aciklama = ai_yorum(x_prof, val0, k_esik, mode)
+
+    # Faz kayması ve sivrilik hesapla
+    ortusme_r, faz_yorum_r, faz_renk_r = faz_kaymasi(x_prof)
+    fwhm_r, siv_form_r, siv_renk_r     = tepe_sivrilik(x_prof, yi)
 
     cp1, cp2 = st.columns(2)
     with cp1:
@@ -364,6 +432,7 @@ if targets:
         plt.tight_layout()
         st.pyplot(fig_yp)
 
+    # AI Teşhis
     st.markdown(f"""<div style='padding:12px;background:#0a1a0f;
     border:1px solid {renk}55;border-radius:8px;font-family:monospace;margin-top:8px;'>
     <span style='color:#888;font-size:12px;'>🤖 AI TEŞHİS (H1)</span><br>
@@ -371,13 +440,35 @@ if targets:
     <span style='color:#aaa;font-size:12px;font-style:italic;'>{aciklama}</span>
     </div>""", unsafe_allow_html=True)
 
+    st.markdown("---")
+
+    # Faz Kayması + Tepe Sivrilik yan yana
+    fa_col, siv_col = st.columns(2)
+
+    with fa_col:
+        guc_dolu = int(ortusme_r * 5)
+        guc_bar_str = "●" * guc_dolu + "○" * (5 - guc_dolu)
+        st.markdown(f"""<div class='faz-panel'>
+        <b style='color:#00CFFF;'>── FAZ KAYMASI ANALİZİ ──</b><br>
+        Örtüşme &nbsp;: <b style='color:{faz_renk_r};'>%{int(ortusme_r*100)}</b><br>
+        Güven &nbsp;&nbsp;&nbsp;: <span style='color:{faz_renk_r};letter-spacing:2px;'>{guc_bar_str}</span><br>
+        Yorum &nbsp;&nbsp;&nbsp;: <span style='color:{faz_renk_r};'>{faz_yorum_r}</span>
+        </div>""", unsafe_allow_html=True)
+
+    with siv_col:
+        fwhm_str = f"{fwhm_r:.2f} m" if fwhm_r is not None else "—"
+        st.markdown(f"""<div class='siv-panel'>
+        <b style='color:#FF00FF;'>── TEPE KARAKTERİ ──</b><br>
+        Genişlik : <b style='color:{siv_renk_r};'>{fwhm_str}</b><br>
+        Form &nbsp;&nbsp;&nbsp;&nbsp;: <span style='color:{siv_renk_r};'>{siv_form_r}</span>
+        </div>""", unsafe_allow_html=True)
+
 st.markdown("---")
 
 # ── 3D İNTERAKTİF ──────────────────────────────────────────
 st.subheader("🧊 3D İnteraktif Topografya")
 st.caption("💡 Mouse ile döndür · Tekerlek ile yakınlaş · Hover ile değer gör")
 
-# 3D: X=sutun(yi), Y=satir(xi)
 fig3d = go.Figure(data=[go.Surface(
     z=zi, x=yi, y=xi,
     colorscale=[
@@ -391,8 +482,8 @@ fig3d = go.Figure(data=[go.Surface(
 
 if targets:
     fig3d.add_trace(go.Scatter3d(
-        x=[t['y'] for t in targets],   # sutun → X
-        y=[t['x'] for t in targets],   # satir → Y
+        x=[t['y'] for t in targets],
+        y=[t['x'] for t in targets],
         z=[t['amp'] for t in targets],
         mode='markers+text',
         marker=dict(size=6, color='white', symbol='cross'),
@@ -429,7 +520,8 @@ st.markdown("---")
 
 # ── RAPOR İNDİR ────────────────────────────────────────────
 st.subheader("💾 Rapor")
-rapor = rapor_olustur(df, targets, std_noise, sigma, mode, uploaded.name)
+rapor = rapor_olustur(df, targets, std_noise, sigma, mode, uploaded.name,
+                      ortusme_r, faz_yorum_r, fwhm_r, siv_form_r)
 st.download_button(
     "📄 TXT Raporu İndir",
     data=rapor.encode('utf-8'),
