@@ -1144,7 +1144,7 @@ if __name__ == "__main__":
     if path and adim:
         C3Analiz(path, adim_m=adim).run()
 PYTHON_EOF
-echo "Yazıldı, satır sayısı:"
+print("Yazıldı, satır sayısı:")
 wc -l /home/claude/c3_analiz_fixed.py
 Output
 
