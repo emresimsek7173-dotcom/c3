@@ -723,3 +723,5 @@ st.markdown("---")
 st.caption(f"C3 ANALİZ PRO v3 | {meta['n_sutun']}×{meta['n_satir']} nokta | "
            f"{meta['alan_x']:.1f}m×{meta['alan_y']:.1f}m | "
            f"Grid {meta['grid_res']}px | Adım {adim_cm}cm")
+PYEOF
+echo "Yazıldı"
