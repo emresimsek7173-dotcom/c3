@@ -37,13 +37,22 @@ def _normalize_col(s: str) -> str:
 
 
 def obje_tahmini(tip, r2_m, r2_b, fwhm, derinlik, val, snr, mod):
-    """Tüm kanıtları birleştirerek olası obje tipini tahmin eder"""
-    tahminler = []
+    """
+    Tüm kanıtları birleştirerek olası obje tipini tahmin eder.
+    Çömlek, küp, demir, boru, oda, kaya gibi somut tahminler üretir.
+    Güven düzeyiyle birlikte döndürür.
+
+    Parametreler
+    ------------
+    mod : str — Aktif görüntüleme modu; Gradient/Analitik için farklı yorumlar.
+    """
+    tahminler = []  # (obje_adi, puan, renk)
 
     d  = derinlik or 0.0
     fw = fwhm     or 0.5
     am = abs(val)
 
+    # ── Gradient / Analitik modunda farklı yorum ─────────────────────────────
     if mod in ('Gradient', 'Analitik'):
         tahminler.append(("Kenar/Sinir anomalisi — detay modda incele", 0.50, '#FFA500'))
         if not tahminler:
@@ -51,36 +60,150 @@ def obje_tahmini(tip, r2_m, r2_b, fwhm, derinlik, val, snr, mod):
         tahminler.sort(key=lambda x: x[1], reverse=True)
         return tahminler[:3]
 
-    # Metal grubu
+    # ── Metal grubu ───────────────────────────────────────────────────────────
     if tip == 'metal' and r2_m >= 0.35:
         if fw < 0.25 and d < 0.5:
             tahminler.append(("Küçük metal obje (sikke/parça)", r2_m * 0.90 + (1 - d) * 0.10, '#FF6600'))
         elif fw < 0.7 and 0.2 < d < 1.2:
-            tahminler.append(("Metal küp / sandık / kap", r2_m * 0.85, '#FF4500'))
+            tahminler.append(("Metal küp / sandık / kap",       r2_m * 0.85,                  '#FF4500'))
         elif fw >= 0.7 and d < 1.5:
-            tahminler.append(("Metal boru / ray / levha", r2_m * 0.80, '#FF2200'))
+            tahminler.append(("Metal boru / ray / levha",        r2_m * 0.80,                  '#FF2200'))
         elif d >= 1.5:
-            tahminler.append(("Derin metal yapı", r2_m * 0.70, '#FF0000'))
-        tahminler.append(("Metal obje", r2_m * 0.60, '#FF8C00'))
+            tahminler.append(("Derin metal yapı",                r2_m * 0.70,                  '#FF0000'))
+        # Genel metal (her durumda eklenir, sıralamada arkada kalır)
+        tahminler.append(("Metal obje",                          r2_m * 0.60,                  '#FF8C00'))
 
-    # Boşluk / seramik grubu
+    # ── Boşluk / seramik grubu ────────────────────────────────────────────────
     if tip == 'bosluk' and r2_b >= 0.35:
         if fw < 0.5 and d < 0.8:
-            tahminler.append(("Çömlek / pişmiş toprak kap", r2_b * 0.85, '#00CFFF'))
-            tahminler.append(("Küçük boşluk / hava cebi", r2_b * 0.70, '#00AACC'))
+            tahminler.append(("Çömlek / pişmiş toprak kap",     r2_b * 0.85, '#00CFFF'))
+            tahminler.append(("Küçük boşluk / hava cebi",       r2_b * 0.70, '#00AACC'))
         elif fw < 1.0 and 0.3 < d < 1.5:
-            tahminler.append(("Çömlek küp / seramik obje", r2_b * 0.80, '#00CFFF'))
-            tahminler.append(("Küçük yapı boşluğu", r2_b * 0.65, '#0088AA'))
+            tahminler.append(("Çömlek küp / seramik obje",      r2_b * 0.80, '#00CFFF'))
+            tahminler.append(("Küçük yapı boşluğu",             r2_b * 0.65, '#0088AA'))
         elif fw >= 1.0 or d >= 1.5:
-            tahminler.append(("Tünel / oda / mezar odası", r2_b * 0.75, '#0066FF'))
-            tahminler.append(("Büyük boşluk yapısı", r2_b * 0.60, '#0044CC'))
-        tahminler.append(("Boşluk / içi dolu olmayan yapı", r2_b * 0.50, '#88AAFF'))
+            tahminler.append(("Tünel / oda / mezar odası",      r2_b * 0.75, '#0066FF'))
+            tahminler.append(("Büyük boşluk yapısı",            r2_b * 0.60, '#0044CC'))
+        tahminler.append(("Boşluk / içi dolu olmayan yapı",     r2_b * 0.50, '#88AAFF'))
+
+    # ── Karma / çelişkili ─────────────────────────────────────────────────────
+    if tip == 'belirsiz' or (r2_m > 0.30 and r2_b > 0.30 and abs(r2_m - r2_b) < 0.20):
+        if fw < 0.6 and d < 1.0:
+            tahminler.append(("Çömlek (metal içerikli?)",        0.50, '#FFD700'))
+            tahminler.append(("Pişmiş kil / karma malzeme",      0.45, '#FFA500'))
+        else:
+            tahminler.append(("Karma yapı / belirsiz",           0.30, '#888888'))
+
+    # ── Zemin anomalisi ───────────────────────────────────────────────────────
+    if snr < 2.0 or am < 0.5:
+        tahminler.append(("Zemin gürültüsü / mineral iz",        0.40, '#666666'))
+        tahminler.append(("Manyetik kaya / doğal anomali",       0.35, '#556655'))
 
     if not tahminler:
         return [("Tanımlanamadı", 0.0, '#555555')]
 
     tahminler.sort(key=lambda x: x[1], reverse=True)
     return tahminler[:3]
+
+
+def _teshis(x_prof, val, tip, r2_m, r2_b, ortusme, fwhm, esik):
+    """Entegre teşhis"""
+    if abs(val) < esik:
+        return "TEMIZ/SINYAL YOK", "#FFFFFF", "Anomali yok."
+
+    vmax = float(np.max(x_prof))
+    vmin = float(np.min(x_prof))
+    vr   = max(vmax - vmin, 1e-5)
+
+    if abs(x_prof[0]) > abs(val) * 0.88 or abs(x_prof[-1]) > abs(val) * 0.88:
+        return "KENAR/DEGERLI?", "#FFA500", "Sınırda kesilmiş — alanı büyüt!"
+
+    mo = bo = blo = 0.0
+
+    hp = vmax >  vr * 0.15
+    ht = vmin < -vr * 0.15
+    if hp and ht:
+        if abs(vmin) > vmax: mo  += 0.25
+        else:                bo  += 0.15; mo += 0.10
+    elif ht:  bo  += 0.25
+    elif hp:  mo  += 0.20; blo += 0.05
+    else:     blo += 0.25
+
+    r2m_v = r2_m if r2_m is not None else 0.0
+    r2b_v = r2_b if r2_b is not None else 0.0
+    mo  += 0.40 * r2m_v
+    bo  += 0.40 * r2b_v
+    blo += 0.10 * max(0.0, 0.35 - max(r2m_v, r2b_v))
+
+    if ortusme is not None:
+        if   ortusme > 0.80: bo  += 0.20
+        elif ortusme > 0.50: blo += 0.20
+        else:                mo  += 0.20
+
+    if fwhm is not None:
+        if   fwhm < 0.3: mo  += 0.15
+        elif fwhm < 0.8: mo  += 0.08; blo += 0.07
+        else:            bo  += 0.10; blo += 0.05
+
+    total = mo + bo + blo + 1e-9
+    pm = mo / total; pb = bo / total; pbl = blo / total
+
+    celisik = abs(pm - pb) < 0.15 and max(pm, pb) > 0.30
+    if celisik:
+        return ("KARMA/ÇELIŞKILI", "#FFD700",
+                f"Metal%{int(pm*100)} Boşluk%{int(pb*100)} — çoklu tarama")
+
+    kaz = max([('metal', pm), ('bosluk', pb), ('belirsiz', pbl)],
+              key=lambda x: x[1])
+
+    if kaz[0] == 'metal':
+        if pm > 0.70: return ("METAL KÜTLE",    "#FF4500", f"Güçlü metal (%{int(pm*100)})")
+        else:         return ("MUHTEMEL METAL",  "#FF8C00", f"Metal ihtimali %{int(pm*100)}")
+    elif kaz[0] == 'bosluk':
+        if pb > 0.70: return ("BOŞLUK/TÜNEL",   "#00FFFF", f"Güçlü boşluk (%{int(pb*100)})")
+        else:         return ("MUHTEMEL BOŞLUK", "#88AAFF", f"Boşluk ihtimali %{int(pb*100)}")
+    else:
+        return ("BELİRSİZ", "#888888", "Yetersiz sinyal — sigma/eşik düş")
+
+
+def _faz_kaymasi(x_prof, y_prof):
+    """Faz kayması hesaplama"""
+    try:
+        neg = x_prof < 0
+        if neg.sum() < 2:
+            return 0.0, "Negatif bölge yok"
+        neg_idx  = np.where(neg)[0]
+        cukur    = int(np.mean(neg_idx))
+        ana      = np.sqrt(np.gradient(x_prof)**2 + x_prof**2)
+        tepe     = int(np.argmax(ana))
+        mesafe   = abs(tepe - cukur)
+        ortusme  = max(0.0, 1.0 - mesafe / (len(x_prof) * 0.3))
+        yorum = ("Manyetik olmayan/boşluk" if ortusme > 0.80 else
+                 "Karışık sinyal"           if ortusme > 0.50 else
+                 "Demir dipol")
+        return ortusme, yorum
+    except Exception:
+        return 0.0, "Hesaplanamadı"
+
+
+def _tepe_sivrilik(x_prof, xi):
+    """Tepe sivrilik hesaplama"""
+    try:
+        ana = np.sqrt(np.gradient(x_prof)**2 + x_prof**2)
+        tv  = ana.max()
+        if tv < 1e-6:
+            return None, "Tepe yok"
+        idx = np.where(ana >= tv * 0.5)[0]
+        if len(idx) < 2:
+            return None, "Tepe dar"
+        adim = (xi[-1] - xi[0]) / max(len(xi) - 1, 1)
+        fwhm = (idx[-1] - idx[0]) * adim
+        form = ("Sivri → küçük yoğun" if fwhm < 0.3 else
+                "Orta → hacimli kütle" if fwhm < 0.8 else
+                "Yayvan → büyük yapı")
+        return fwhm, form
+    except Exception:
+        return None, "Hesaplanamadı"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,6 +386,21 @@ class C3Analiz:
                         sonuclar.append((dp, w))
                         yontemler.append(f"P½={dp:.2f}m")
 
+            grad = np.gradient(profil, adim)
+            ana  = np.sqrt(grad**2 + profil**2)
+            at   = ana.max()
+            if at > 1e-6:
+                idx = np.where(ana >= at * 0.5)[0]
+                if len(idx) >= 2:
+                    fwhm = (idx[-1] - idx[0]) * adim
+                    fd   = np.sqrt(max(fwhm**2 - (SENSOR_MESAFESI * 0.5)**2,
+                                       fwhm**2 * 0.1))
+                    df2  = max(0.0, fd / 2.0 - YUKSEKLIK_SABITI)
+                    if 0.01 < df2 < MAX_DEPTH:
+                        w = min(0.40, 0.10 + 0.30 * (len(idx) / len(profil)))
+                        sonuclar.append((df2, w))
+                        yontemler.append(f"FWHM={df2:.2f}m")
+
             if not sonuclar:
                 return self._derinlik(tv), None, "Yeterli profil yok"
 
@@ -270,7 +408,15 @@ class C3Analiz:
             df = sum(d * w for d, w in sonuclar) / tw
             df = max(0.0, min(df, MAX_DEPTH))
 
-            return df, int(min(snr / 20.0, 1.0) * 100), " | ".join(yontemler)
+            if len(sonuclar) >= 2:
+                vals = [d for d, _ in sonuclar]
+                tut = 1.0 - min(np.std(vals) / (np.mean(vals) + 0.01), 1.0)
+                snrs = min(snr / 15.0, 1.0)
+                guven = int((tut * 0.7 + snrs * 0.3) * 100)
+            else:
+                guven = max(20, int(min(snr / 20.0, 1.0) * 50))
+
+            return df, guven, " | ".join(yontemler)
         except Exception:
             peak_val = np.max(np.abs(profil)) if len(profil) > 0 else 0.0
             return self._derinlik(peak_val), None, "Hata"
@@ -519,6 +665,17 @@ def main():
 
                 depth, guven, ystr = analiz._derinlik_pro(xn, xi)
                 z_d, r2s, r2m, r2b, fp, tip, dyorum = analiz._dipol_fit(xn, xi)
+                
+                # Faz kayması
+                ortusme, faz_y = _faz_kaymasi(xp, yp)
+                # Tepe sivrilik
+                fwhm, siv_y = _tepe_sivrilik(xp, xi)
+                
+                # SNR hesaplama
+                snr = abs(secili_hedef['amp']) / (analiz.gurultu_std * gain + 1e-9)
+
+                # Teşhis
+                durum, renk, aciklama = _teshis(xp, secili_hedef['amp'], tip, r2m, r2b, ortusme, fwhm, esik_final)
 
                 # X ve Y profil grafikleri
                 fig_prof, (ax_x, ax_y) = plt.subplots(2, 1, figsize=(10, 6), facecolor='#0a0a0f')
@@ -558,38 +715,67 @@ def main():
                 st.markdown("---")
                 st.subheader("🔬 Analiz Sonuçları")
 
+                # Teşhis bilgisi
+                st.markdown(f"### {durum}")
+                st.info(f"**{aciklama}**")
+
                 result_col1, result_col2, result_col3 = st.columns(3)
 
                 with result_col1:
                     st.markdown("**Derinlik & Güven**")
                     depth_val = float(depth) if depth is not None else 0.0
-                    st.success(f"Derinlik: ~{depth_val:.2f} m\nGüven: %{guven or '?'}")
+                    st.success(f"📏 Derinlik: ~{depth_val:.2f} m\n✅ Güven: %{guven or '?'}")
 
                 with result_col2:
                     st.markdown("**Dipol Analiz**")
                     if tip:
                         tip_renk = "🔴 Metal" if tip == 'metal' else "🔵 Boşluk" if tip == 'bosluk' else "⚪ Belirsiz"
-                        st.info(f"{tip_renk}\nR²: {r2s:.2f}\n{dyorum}")
+                        r2s_val = f"{r2s:.2f}" if r2s is not None else "?"
+                        st.info(f"{tip_renk}\n📊 R²: {r2s_val}")
 
                 with result_col3:
                     st.markdown("**Uyum Oranları**")
                     r2m_v = r2m if r2m is not None else 0.0
                     r2b_v = r2b if r2b is not None else 0.0
-                    st.metric("Metal R²", f"{r2m_v:.2f}")
-                    st.metric("Boşluk R²", f"{r2b_v:.2f}")
+                    col_r2m, col_r2b = st.columns(2)
+                    with col_r2m:
+                        st.metric("Metal R²", f"{r2m_v:.2f}")
+                    with col_r2b:
+                        st.metric("Boşluk R²", f"{r2b_v:.2f}")
 
-                # Obje Tahmini
-                tahminler = obje_tahmini(tip, r2m_v, r2b_v, None, depth_val,
+                # Faz Kayması ve Tepe bilgisi
+                info_col1, info_col2 = st.columns(2)
+                
+                with info_col1:
+                    st.markdown("**Faz Kayması**")
+                    ort_yuzde = int(ortusme * 100) if ortusme is not None else 0
+                    st.write(f"Örtüşme: %{ort_yuzde}\n{faz_y}")
+
+                with info_col2:
+                    st.markdown("**Tepe Karakteri**")
+                    if fwhm is not None:
+                        st.write(f"FWHM: {fwhm:.2f}m\n{siv_y}")
+                    else:
+                        st.write("FWHM: ?\nTepe bilgisi yok")
+
+                # Obje Tahmini - DÜZELTILMIŞ
+                tahminler = obje_tahmini(tip, r2m_v, r2b_v, fwhm, depth_val,
                                         secili_hedef['amp'], 
-                                        abs(secili_hedef['amp']) / (analiz.gurultu_std * gain + 1e-9),
+                                        snr,
                                         mod)
 
                 st.markdown("---")
                 st.subheader("🏛️ Olası Objeler")
 
-                for isim, puan, _ in tahminler:
+                for isim, puan, renk_hex in tahminler:
                     puan_yuzde = int(puan * 100)
-                    st.progress(puan, text=f"{isim} - %{puan_yuzde}")
+                    # Renk yüzdesine göre değiştir
+                    col1_obj, col2_obj = st.columns([1, 4])
+                    with col1_obj:
+                        st.markdown(f"**%{puan_yuzde}**")
+                    with col2_obj:
+                        st.write(f"{isim}")
+                    st.progress(puan, text=f"{isim}")
 
                 # Rapor indir
                 st.markdown("---")
@@ -604,6 +790,7 @@ def main():
                     'dipol_tipi': tip,
                     'r2_metal': float(r2m) if r2m is not None else None,
                     'r2_bosluk': float(r2b) if r2b is not None else None,
+                    'tahminler': [(n, int(p*100)) for n, p, _ in tahminler],
                 }
 
                 rapor_json = json.dumps(rapor_data, ensure_ascii=False, indent=2)
